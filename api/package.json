@@ -1,7 +1,7 @@
 {
   "name": "agentmolt-api",
-  "version": "1.0.0",
-  "description": "AgentMolt - Business OS for AI Agents",
+  "version": "2.0.0",
+  "description": "AgentMolt - Business OS for AI Agents with Verification, Real-time Dashboard, and Data Integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +10,8 @@
   "dependencies": {
     "express": "^4.18.2",
     "@supabase/supabase-js": "^2.38.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "axios": "^1.6.0"
   },
   "engines": {
     "node": ">=18"
