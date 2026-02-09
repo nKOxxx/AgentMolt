@@ -1,5 +1,12 @@
 -- AgentMolt Database Schema v2.5
 -- Adds messaging tables for secure A2A communication
+-- Adds API key authentication
+
+-- Add API key column to agents table
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS api_key VARCHAR(64) UNIQUE;
+
+-- Create index for API key lookups
+CREATE INDEX IF NOT EXISTS idx_agents_api_key ON agents(api_key);
 
 -- Messages table (encrypted at rest)
 CREATE TABLE IF NOT EXISTS messages (

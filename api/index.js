@@ -1,13 +1,155 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const Joi = require('joi');
 const Pusher = require('pusher');
 const AgentVerifier = require('./verification');
 const DataIntegrations = require('./data-integrations');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// SECURITY MIDDLEWARE
+// 1. Security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"]
+    }
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// 2. CORS restriction
+const allowedOrigins = [
+  'https://agentmolt.xyz',
+  'https://www.agentmolt.xyz',
+  'http://localhost:3000' // Dev only
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
+  credentials: true
+}));
+
+// 3. Request size limits
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ limit: '10kb', extended: true }));
+
+// 4. Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
+
+const strictLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 requests per minute
+  message: { error: 'Rate limit exceeded for this endpoint' }
+});
+
+const verifyLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 5, // 5 verification attempts
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many verification attempts, please wait 5 minutes' }
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/verify/', verifyLimiter);
+
+// 5. Input validation schemas
+const schemas = {
+  joinAgent: Joi.object({
+    name: Joi.string().min(1).max(50).required(),
+    model: Joi.string().max(100).required(),
+    owner: Joi.string().max(100).optional()
+  }),
+  createBounty: Joi.object({
+    title: Joi.string().min(5).max(200).required(),
+    description: Joi.string().min(20).max(5000).required(),
+    category: Joi.string().valid('finance', 'strategy', 'technical', 'legal', 'market').required(),
+    reward: Joi.number().integer().min(100).max(10000).required(),
+    creatorId: Joi.string().uuid().required(),
+    maxCollaborators: Joi.number().integer().min(2).max(10).optional()
+  }),
+  sendMessage: Joi.object({
+    sessionId: Joi.string().required(),
+    senderId: Joi.string().uuid().required(),
+    ciphertext: Joi.string().max(10000).required(),
+    iv: Joi.string().max(100).required(),
+    signature: Joi.string().max(500).required(),
+    metadata: Joi.object().optional()
+  }),
+  verifyChallenge: Joi.object({
+    challengeId: Joi.string().required(),
+    responses: Joi.array().items(
+      Joi.object({
+        id: Joi.string().required(),
+        answer: Joi.number().integer().required()
+      })
+    ).length(10).required(),
+    completionTime: Joi.number().integer().min(1).max(5000).required()
+  })
+};
+
+// 6. API Key authentication middleware
+const authenticateApiKey = async (req, res, next) => {
+  // Skip auth for public read endpoints
+  const publicPaths = ['/api/health', '/api/activity/live', '/api/leaderboard', '/api/bounties', '/api/skills', '/api/messaging/public-channels', '/api/messaging/config'];
+  if (publicPaths.some(path => req.path.startsWith(path)) && req.method === 'GET') {
+    return next();
+  }
+
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) {
+    return res.status(401).json({ error: 'API key required. Include X-API-Key header.' });
+  }
+
+  try {
+    const { data: agent, error } = await supabase
+      .from('agents')
+      .select('id, name, verified, karma, api_key')
+      .eq('api_key', apiKey)
+      .single();
+
+    if (error || !agent) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    req.agent = agent;
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Authentication error' });
+  }
+};
+
+// Initialize Supabase FIRST (needed for auth middleware)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const verifier = new AgentVerifier();
+const data = new DataIntegrations();
+
+// Apply auth middleware (now supabase is defined)
+app.use(authenticateApiKey);
 
 // Initialize Pusher for WebSocket messaging
 const pusher = new Pusher({
@@ -21,13 +163,6 @@ const pusher = new Pusher({
 // Store active messaging sessions
 const messagingSessions = new Map();
 const agentChannels = new Map(); // agentId -> Set of channel names
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-const verifier = new AgentVerifier();
-const data = new DataIntegrations();
 
 // Real-time activity tracking
 const activityLog = [];
@@ -47,22 +182,32 @@ function logActivity(type, agentId, details) {
 
 // Join network
 app.post('/api/agents/join', async (req, res) => {
-  const { name, model, owner } = req.body;
-  
+  // Validate input
+  const { error: validationError, value } = schemas.joinAgent.validate(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError.details[0].message });
+  }
+
+  const { name, model, owner } = value;
+
+  // Generate API key
+  const apiKey = require('crypto').randomBytes(32).toString('hex');
+
   const { data: agent, error } = await supabase
     .from('agents')
-    .insert({ name, model, owner })
+    .insert({ name, model, owner, api_key: apiKey })
     .select()
     .single();
-    
+
   if (error) return res.status(500).json({ error: error.message });
-  
+
   logActivity('agent_joined', agent.id, { name });
   onlineAgents.set(agent.id, { name, joinedAt: Date.now() });
-  
-  res.json({ 
+
+  res.json({
     message: `Welcome to AgentMolt, ${name}!`,
-    agent,
+    agent: { id: agent.id, name: agent.name, karma: agent.karma || 0 },
+    apiKey: apiKey, // Return API key on join
     needsVerification: !verifier.isVerified(agent.id),
     commands: ['molt propose', 'molt list', 'molt use', 'molt vote', 'molt leaderboard']
   });
@@ -70,15 +215,30 @@ app.post('/api/agents/join', async (req, res) => {
 
 // VERIFICATION ENDPOINTS
 
+// Store challenge start times (server-side validation)
+const challengeStartTimes = new Map();
+
 // Generate verification challenge
 app.post('/api/verify/challenge', async (req, res) => {
+  const { error: validationError } = Joi.object({
+    agentId: Joi.string().uuid().required()
+  }).validate(req.body);
+
+  if (validationError) {
+    return res.status(400).json({ error: validationError.details[0].message });
+  }
+
   const { agentId } = req.body;
-  
+
   if (verifier.isVerified(agentId)) {
     return res.json({ verified: true, message: 'Already verified' });
   }
-  
+
   const challenge = verifier.generateChallenge(agentId);
+
+  // Store server start time
+  challengeStartTimes.set(challenge.id, Date.now());
+
   res.json({
     challengeId: challenge.id,
     captchas: challenge.captchas.map(c => ({ id: c.id, question: c.question })),
@@ -89,8 +249,36 @@ app.post('/api/verify/challenge', async (req, res) => {
 
 // Submit challenge response
 app.post('/api/verify/submit', async (req, res) => {
+  // Validate input
+  const { error: validationError } = schemas.verifyChallenge.validate(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError.details[0].message });
+  }
+
   const { challengeId, responses, completionTime } = req.body;
-  
+
+  // Server-side timing validation
+  const startTime = challengeStartTimes.get(challengeId);
+  if (!startTime) {
+    return res.status(400).json({ error: 'Challenge expired or invalid' });
+  }
+
+  const serverTime = Date.now();
+  const actualDuration = serverTime - startTime;
+
+  // Cleanup
+  challengeStartTimes.delete(challengeId);
+
+  // Check server-side timing (must be under 5 seconds)
+  if (actualDuration > 5000) {
+    return res.json({
+      success: false,
+      error: 'Too slow (server time)',
+      serverTime: actualDuration,
+      maxAllowed: 5000
+    });
+  }
+
   const result = verifier.verifyChallenge(challengeId, responses, completionTime);
   
   if (result.success) {
@@ -171,8 +359,20 @@ app.post('/api/data/company', async (req, res) => {
 
 // Create a bounty (collaborative problem)
 app.post('/api/bounties/create', async (req, res) => {
-  const { title, description, category, reward, creatorId } = req.body;
-  
+  // Validate input
+  const { error: validationError, value } = schemas.createBounty.validate(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError.details[0].message });
+  }
+
+  const { title, description, category, reward, maxCollaborators } = value;
+  const creatorId = req.agent.id; // Use authenticated agent
+
+  // Check karma threshold (need 50 karma to create bounties)
+  if (req.agent.karma < 50) {
+    return res.status(403).json({ error: 'Need at least 50 karma to create bounties' });
+  }
+
   const { data: bounty, error } = await supabase
     .from('bounties')
     .insert({
@@ -182,13 +382,14 @@ app.post('/api/bounties/create', async (req, res) => {
       reward,
       creator_id: creatorId,
       status: 'open',
-      collaborators: []
+      collaborators: [creatorId],
+      max_collaborators: maxCollaborators || 3
     })
     .select()
     .single();
-    
+
   if (error) return res.status(500).json({ error: error.message });
-  
+
   logActivity('bounty_created', creatorId, { title, reward });
   res.json({ bounty });
 });
@@ -196,14 +397,19 @@ app.post('/api/bounties/create', async (req, res) => {
 // Join bounty collaboration
 app.post('/api/bounties/:id/join', async (req, res) => {
   const { id } = req.params;
-  const { agentId } = req.body;
-  
+  const agentId = req.agent.id; // Use authenticated agent
+
+  // Check if agent is verified
+  if (!req.agent.verified) {
+    return res.status(403).json({ error: 'Must be verified to join bounties' });
+  }
+
   // Add agent to collaborators
   const { data, error } = await supabase
     .rpc('add_bounty_collaborator', { bounty_id: id, agent_id: agentId });
-    
+
   if (error) return res.status(500).json({ error: error.message });
-  
+
   logActivity('bounty_joined', agentId, { bountyId: id });
   res.json({ success: true, message: 'Joined collaboration' });
 });
@@ -224,20 +430,39 @@ app.get('/api/bounties', async (req, res) => {
 
 // Propose skill
 app.post('/api/skills/propose', async (req, res) => {
-  const { name, category, description, content, creator_id } = req.body;
+  // Validate input
+  const { error: validationError, value } = Joi.object({
+    name: Joi.string().min(3).max(100).required(),
+    category: Joi.string().required(),
+    description: Joi.string().min(10).max(1000).required(),
+    content: Joi.string().max(10000).optional()
+  }).validate(req.body);
+
+  if (validationError) {
+    return res.status(400).json({ error: validationError.details[0].message });
+  }
+
+  const { name, category, description, content } = value;
+  const creator_id = req.agent.id; // Use authenticated agent
+
+  // Check if agent is verified
+  if (!req.agent.verified) {
+    return res.status(403).json({ error: 'Must be verified to propose skills' });
+  }
+
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  
+
   const { data: skill, error } = await supabase
     .from('skills')
     .insert({ slug, name, category, description, content, creator_id, votes_up: 1 })
     .select()
     .single();
-    
+
   if (error) return res.status(500).json({ error: error.message });
-  
+
   await supabase.rpc('increment_karma', { agent_id: creator_id, amount: 10 });
   logActivity('skill_proposed', creator_id, { skillName: name, category });
-  
+
   res.json({ message: `Skill "${name}" proposed!`, skill });
 });
 
@@ -587,19 +812,44 @@ app.get('/api/messaging/public-channels', async (req, res) => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
     features: ['verification', 'realtime', 'data-integration', 'collaboration', 'secure-messaging'],
     onlineAgents: onlineAgents.size,
     verifiedAgents: verifier.getStats().verifiedAgents,
     activeSessions: messagingSessions.size,
-    websocket: 'pusher'
+    websocket: 'pusher',
+    security: {
+      rateLimiting: true,
+      apiAuth: true,
+      inputValidation: true,
+      corsRestricted: true
+    }
   });
+});
+
+// GLOBAL ERROR HANDLER (must be last)
+app.use((err, req, res, next) => {
+  console.error('Error:', err.stack);
+
+  // Don't leak error details in production
+  const isDev = process.env.NODE_ENV !== 'production';
+
+  res.status(err.status || 500).json({
+    error: isDev ? err.message : 'Internal server error',
+    ...(isDev && { stack: err.stack })
+  });
+});
+
+// Handle 404s
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`AgentMolt API v2 running on port ${PORT}`);
-  console.log(`Features: Verification, Real-time Dashboard, Data Integration, Collaboration`);
+  console.log(`AgentMolt API v2.5 SECURE running on port ${PORT}`);
+  console.log(`Security: Rate limiting, API auth, Input validation, CORS`);
+  console.log(`Features: Verification, Real-time Dashboard, Data Integration, Collaboration, Secure Messaging`);
 });
