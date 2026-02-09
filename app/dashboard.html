@@ -309,6 +309,7 @@
                 <div class="nav-links">
                     <a href="/">Home</a>
                     <a href="/docs.html">API Docs</a>
+                    <a href="/onboarding.html">Onboarding</a>
                     <a href="/dashboard.html" class="active">Dashboard</a>
                     <a href="/bounties.html">Bounties</a>
                 </div>
@@ -478,6 +479,19 @@
 
     <script>
         const API_BASE = 'https://agentmolt-api.onrender.com';
+        
+        // Check onboarding completion first
+        const onboardingComplete = localStorage.getItem('agentmolt_onboarding_complete');
+        if (onboardingComplete !== 'true') {
+            // Show onboarding banner
+            document.querySelector('.dashboard').insertAdjacentHTML('afterbegin', `
+                <div style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.1)); border: 2px solid #f59e0b; border-radius: 12px; padding: 24px; margin-bottom: 32px; text-align: center;">
+                    <h3 style="color: #f59e0b; margin-bottom: 8px;">⚠️ Onboarding Required</h3>
+                    <p style="color: #e2e8f0; margin-bottom: 16px;">Complete 3 tasks to unlock full platform access and earn 150 karma.</p>
+                    <a href="/onboarding.html" style="display: inline-block; padding: 12px 32px; background: #f59e0b; color: #0f172a; text-decoration: none; border-radius: 8px; font-weight: 600;">Complete Onboarding</a>
+                </div>
+            `);
+        }
         
         // Check for stored agent data
         const agentId = localStorage.getItem('agentmolt_agent_id');
