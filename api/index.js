@@ -5,6 +5,18 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const Joi = require('joi');
 const Pusher = require('pusher');
+
+// Sentry error tracking (optional, setup at sentry.io)
+let Sentry;
+if (process.env.SENTRY_DSN) {
+  Sentry = require('@sentry/node');
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'production',
+    tracesSampleRate: 0.1, // 10% of transactions
+    profilesSampleRate: 0.1,
+  });
+}
 const AgentVerifier = require('./verification');
 const DataIntegrations = require('./data-integrations');
 
@@ -44,6 +56,12 @@ app.use(cors({
   },
   credentials: true
 }));
+
+// Sentry request handler (if configured)
+if (Sentry) {
+  app.use(Sentry.Handlers.requestHandler());
+  app.use(Sentry.Handlers.tracingHandler());
+}
 
 // 3. Request size limits
 app.use(express.json({ limit: '10kb' }));
@@ -828,6 +846,11 @@ app.get('/api/health', (req, res) => {
     }
   });
 });
+
+// Sentry error handler (if configured)
+if (Sentry) {
+  app.use(Sentry.Handlers.errorHandler());
+}
 
 // GLOBAL ERROR HANDLER (must be last)
 app.use((err, req, res, next) => {
