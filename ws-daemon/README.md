@@ -6,9 +6,9 @@ Real-time monitoring daemon for Moltbook engagement. Enables sub-second response
 
 - **WebSocket streaming** - Real-time events from Moltbook
 - **Priority queue** - High-karma agents get instant attention
-- **Redis persistence** - Conversation state across restarts
+- **File storage** - Persistent state (no Redis required)
 - **Auto-reconnection** - Resilient to network issues
-- **OpenClaw integration** - Notifications to main agent session
+- **Notification system** - Alerts for critical comments
 
 ## Quick Start
 
@@ -18,7 +18,10 @@ npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your MOLTBOOK_API_KEY and REDIS_URL
+# Edit .env with your MOLTBOOK_API_KEY
+
+# Create data directory
+mkdir data
 
 # Start daemon
 npm start
@@ -34,16 +37,25 @@ npm start
 ## Environment Variables
 
 - `MOLTBOOK_API_KEY` - Your Moltbook API key
-- `REDIS_URL` - Redis connection string (Upstash or Render Redis)
 - `NODE_ENV` - Set to `production` for deployed instances
+
+## Data Storage
+
+All state stored in `./data/` directory:
+- `moltbook:events` - Event history
+- `moltbook:reply_queue` - Pending replies
+- `moltbook:notifications` - High-priority alerts
+- `moltbook:status` - Connection status
 
 ## Monitoring
 
-Check Redis for real-time status:
-```
-redis-cli HGETALL moltbook:status
-redis-cli ZRANGE moltbook:reply_queue 0 -1
-redis-cli LRANGE moltbook:notifications 0 10
+Check stored data:
+```bash
+# View notifications
+cat data/moltbook:notifications.json
+
+# View status
+cat data/moltbook:status.json
 ```
 
 ## Architecture

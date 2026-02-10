@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
-const Redis = require('ioredis');
+const fs = require('fs').promises;
+const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
 
@@ -7,10 +8,10 @@ require('dotenv').config();
 const CONFIG = {
   MOLTBOOK_WS_URL: 'wss://www.moltbook.com/ws/v1/stream',
   MOLTBOOK_API_KEY: process.env.MOLTBOOK_API_KEY,
-  REDIS_URL: process.env.REDIS_URL,
   MY_AGENT_ID: '4ee927aa-4899-4c07-ba4c-cf1edcc0c348',
   MY_AGENT_NAME: 'ares_agent',
-  HEARTBEAT_INTERVAL: 30000, // 30 seconds
+  DATA_DIR: './data',
+  HEARTBEAT_INTERVAL: 30000,
   RECONNECT_BASE_DELAY: 1000,
   MAX_RECONNECT_DELAY: 60000,
   MAX_RECONNECT_ATTEMPTS: 10
@@ -18,17 +19,89 @@ const CONFIG = {
 
 // Priority levels
 const PRIORITY = {
-  CRITICAL: 1,  // High-karma (>1000) reply to my post
-  HIGH: 2,      // Mention of me
-  MEDIUM: 3,    // Any reply to my post
-  LOW: 4,       // New post in followed submolts
-  BACKGROUND: 5 // General activity
+  CRITICAL: 1,
+  HIGH: 2,
+  MEDIUM: 3,
+  LOW: 4,
+  BACKGROUND: 5
 };
+
+// Simple file-based storage
+class FileStorage {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+    this.cache = new Map();
+  }
+
+  async init() {
+    try {
+      await fs.mkdir(this.dataDir, { recursive: true });
+      console.log('[STORAGE] File storage initialized at', this.dataDir);
+    } catch (error) {
+      console.error('[STORAGE] Failed to create data directory:', error.message);
+      throw error;
+    }
+  }
+
+  async set(key, value) {
+    this.cache.set(key, value);
+    const filePath = path.join(this.dataDir, `${key}.json`);
+    try {
+      await fs.writeFile(filePath, JSON.stringify(value, null, 2));
+    } catch (error) {
+      console.error('[STORAGE] Write error:', error.message);
+    }
+  }
+
+  async get(key) {
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
+    }
+    const filePath = path.join(this.dataDir, `${key}.json`);
+    try {
+      const data = await fs.readFile(filePath, 'utf8');
+      const value = JSON.parse(data);
+      this.cache.set(key, value);
+      return value;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async lpush(key, value) {
+    let list = await this.get(key) || [];
+    list.unshift(value);
+    if (list.length > 1000) list = list.slice(0, 1000); // Limit size
+    await this.set(key, list);
+  }
+
+  async lrange(key, start, end) {
+    const list = await this.get(key) || [];
+    return list.slice(start, end === -1 ? undefined : end + 1);
+  }
+
+  async hset(key, field, value) {
+    let hash = await this.get(key) || {};
+    hash[field] = value;
+    await this.set(key, hash);
+  }
+
+  async hgetall(key) {
+    return await this.get(key) || {};
+  }
+
+  async hincrby(key, field, increment) {
+    let hash = await this.get(key) || {};
+    hash[field] = (parseInt(hash[field]) || 0) + increment;
+    await this.set(key, hash);
+    return hash[field];
+  }
+}
 
 class MoltbookWebSocketClient {
   constructor() {
     this.ws = null;
-    this.redis = null;
+    this.storage = new FileStorage(CONFIG.DATA_DIR);
     this.heartbeatInterval = null;
     this.reconnectAttempts = 0;
     this.isConnecting = false;
@@ -38,15 +111,9 @@ class MoltbookWebSocketClient {
   async init() {
     console.log('[INIT] Initializing Moltbook WebSocket client...');
     
-    // Connect to Redis
-    try {
-      this.redis = new Redis(CONFIG.REDIS_URL);
-      await this.redis.ping();
-      console.log('[INIT] Redis connected');
-    } catch (error) {
-      console.error('[INIT] Redis connection failed:', error.message);
-      throw error;
-    }
+    // Initialize file storage
+    await this.storage.init();
+    console.log('[INIT] File storage ready');
 
     // Load my posts
     await this.loadMyPosts();
@@ -101,15 +168,11 @@ class MoltbookWebSocketClient {
     this.isConnecting = false;
     this.reconnectAttempts = 0;
 
-    // Subscribe to channels
     this.subscribe();
-    
-    // Start heartbeat
     this.startHeartbeat();
 
-    // Log to Redis
-    this.redis.hset('moltbook:status', 'connected_at', Date.now());
-    this.redis.hset('moltbook:status', 'status', 'connected');
+    this.storage.hset('moltbook:status', 'connected_at', Date.now().toString());
+    this.storage.hset('moltbook:status', 'status', 'connected');
   }
 
   subscribe() {
@@ -149,15 +212,13 @@ class MoltbookWebSocketClient {
       const event = JSON.parse(data);
       console.log(`[EVENT] ${event.event || 'unknown'} received`);
 
-      // Store event in Redis for analysis
-      await this.redis.lpush('moltbook:events', JSON.stringify({
+      // Store event
+      await this.storage.lpush('moltbook:events', JSON.stringify({
         event: event.event,
         timestamp: event.timestamp || new Date().toISOString(),
         received_at: Date.now()
       }));
-      await this.redis.ltrim('moltbook:events', 0, 999); // Keep last 1000
 
-      // Handle specific event types
       switch (event.event) {
         case 'comment.created':
           await this.handleComment(event.data);
@@ -180,16 +241,13 @@ class MoltbookWebSocketClient {
   async handleComment(data) {
     const { comment_id, post_id, author, content, mentions } = data;
     
-    // Skip my own comments
     if (author.id === CONFIG.MY_AGENT_ID) return;
 
-    // Calculate priority
     const priority = this.calculatePriority(data);
     
     console.log(`[COMMENT] ${author.name} (karma: ${author.karma}) - Priority: ${priority}`);
 
-    // Store comment
-    await this.redis.hset(`moltbook:comments:${post_id}`, comment_id, JSON.stringify({
+    await this.storage.hset(`moltbook:comments:${post_id}`, comment_id, JSON.stringify({
       author: author.name,
       author_karma: author.karma,
       content: content.substring(0, 200),
@@ -197,7 +255,6 @@ class MoltbookWebSocketClient {
       priority
     }));
 
-    // Handle based on priority
     if (priority <= PRIORITY.HIGH) {
       await this.queueHighPriorityReply(data, priority);
     }
@@ -226,38 +283,30 @@ class MoltbookWebSocketClient {
       status: 'pending'
     };
 
-    // Add to priority queue
-    await this.redis.zadd('moltbook:reply_queue', priority, JSON.stringify(replyJob));
+    await this.storage.lpush('moltbook:reply_queue', JSON.stringify(replyJob));
     
     console.log(`[QUEUE] Added reply job for @${comment.author.name} (priority: ${priority})`);
 
-    // Notify OpenClaw gateway if critical
     if (priority === PRIORITY.CRITICAL) {
       await this.notifyOpenClaw(replyJob);
     }
   }
 
   async notifyOpenClaw(job) {
-    try {
-      // Store notification for OpenClaw to pick up
-      await this.redis.lpush('moltbook:notifications', JSON.stringify({
-        type: 'high_priority_comment',
-        job,
-        created_at: Date.now()
-      }));
+    await this.storage.lpush('moltbook:notifications', JSON.stringify({
+      type: 'high_priority_comment',
+      job,
+      created_at: Date.now()
+    }));
 
-      console.log('[NOTIFY] High priority notification queued for OpenClaw');
-    } catch (error) {
-      console.error('[NOTIFY] Failed to notify:', error.message);
-    }
+    console.log('[NOTIFY] High priority notification queued');
   }
 
   async handleNewPost(data) {
     const { author, submolt, tags } = data;
     
-    // Track high-karma agent posts
     if (author.karma > 500) {
-      await this.redis.lpush('moltbook:high_value_posts', JSON.stringify({
+      await this.storage.lpush('moltbook:high_value_posts', JSON.stringify({
         post_id: data.id,
         author: author.name,
         author_karma: author.karma,
@@ -271,9 +320,8 @@ class MoltbookWebSocketClient {
   }
 
   async handleVote(data) {
-    // Track votes on my posts
     if (this.myPosts.has(data.post_id)) {
-      await this.redis.hincrby('moltbook:my_stats', 'total_upvotes', 1);
+      await this.storage.hincrby('moltbook:my_stats', 'total_upvotes', 1);
     }
   }
 
@@ -294,17 +342,11 @@ class MoltbookWebSocketClient {
       this.heartbeatInterval = null;
     }
     this.isConnecting = false;
-    
-    // Update Redis status
-    if (this.redis) {
-      this.redis.hset('moltbook:status', 'status', 'disconnected');
-      this.redis.hset('moltbook:status', 'disconnected_at', Date.now());
-    }
   }
 
   scheduleReconnect() {
     if (this.reconnectAttempts >= CONFIG.MAX_RECONNECT_ATTEMPTS) {
-      console.error('[WS] Max reconnection attempts reached. Giving up.');
+      console.error('[WS] Max reconnection attempts reached');
       return;
     }
 
@@ -321,17 +363,8 @@ class MoltbookWebSocketClient {
 
   async shutdown() {
     console.log('[SHUTDOWN] Cleaning up...');
-    
     this.cleanup();
-    
-    if (this.ws) {
-      this.ws.close();
-    }
-    
-    if (this.redis) {
-      await this.redis.quit();
-    }
-    
+    if (this.ws) this.ws.close();
     console.log('[SHUTDOWN] Complete');
   }
 }
@@ -339,11 +372,9 @@ class MoltbookWebSocketClient {
 // Main execution
 const client = new MoltbookWebSocketClient();
 
-// Handle process signals
 process.on('SIGINT', () => client.shutdown().then(() => process.exit(0)));
 process.on('SIGTERM', () => client.shutdown().then(() => process.exit(0)));
 
-// Start
 client.init().catch(error => {
   console.error('[FATAL] Failed to initialize:', error);
   process.exit(1);
