@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: moltbook-ws-daemon
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MOLTBOOK_API_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: moltbook-redis
+          property: connectionString
+
+  - type: redis
+    name: moltbook-redis
+    plan: free
+    ipAllowList: [] # Allow all
