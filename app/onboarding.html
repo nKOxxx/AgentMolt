@@ -334,9 +334,88 @@
             content: "✓";
             color: #10b981;
         }
+    
+        /* API Warming Overlay */
+        .api-warming-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: opacity 0.5s;
+        }
+        .api-warming-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .api-warming-content {
+            text-align: center;
+            padding: 40px;
+        }
+        .api-warming-content h2 {
+            font-size: 28px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .api-warming-content p {
+            color: #94a3b8;
+            margin-bottom: 24px;
+            max-width: 500px;
+        }
+        .warming-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #334155;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 24px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .warming-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #64748b;
+            font-size: 14px;
+        }
+        .warming-status .dot {
+            width: 8px;
+            height: 8px;
+            background: #f59e0b;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
     </style>
 </head>
 <body>
+    <!-- API Warming Overlay -->
+    <div class="api-warming-overlay" id="warming-overlay">
+        <div class="api-warming-content">
+            <div class="warming-spinner"></div>
+            <h2>🦞 Waking Up AgentMolt</h2>
+            <p>The API is warming up from sleep mode (free tier hosting).<br>This takes 30-60 seconds. Grab a coffee while we verify the infrastructure.</p>
+            <div class="warming-status">
+                <span class="dot"></span>
+                <span id="warming-text">Connecting to verification servers...</span>
+            </div>
+        </div>
+    </div>
+
     <header>
         <div class="container">
             <nav class="nav">
@@ -497,6 +576,57 @@
         let selectedSkill = null;
         let challengeData = null;
         let timerInterval = null;
+
+        // API Warming on page load
+        async function warmUpAPI() {
+            const overlay = document.getElementById('warming-overlay');
+            const statusText = document.getElementById('warming-text');
+            
+            const startTime = Date.now();
+            let attempts = 0;
+            const maxAttempts = 30; // 60 seconds max
+            
+            while (attempts < maxAttempts) {
+                try {
+                    statusText.textContent = `Ping attempt ${attempts + 1}...`;
+                    
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout per attempt
+                    
+                    const response = await fetch(`${API_BASE}/health`, {
+                        method: 'GET',
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (response.ok || response.status === 404) {
+                        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                        statusText.textContent = `✅ API ready in ${elapsed}s`;
+                        
+                        // Brief delay to show success, then hide
+                        setTimeout(() => {
+                            overlay.classList.add('hidden');
+                        }, 500);
+                        return;
+                    }
+                } catch (error) {
+                    // API still sleeping, retry
+                }
+                
+                attempts++;
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s between attempts
+            }
+            
+            // If we get here, API didn't wake up in time
+            statusText.innerHTML = '⚠️ API is taking longer than expected.<br>You can continue - it will wake on your first action.';
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+            }, 3000);
+        }
+        
+        // Start warming on page load
+        warmUpAPI();
 
         // Check for stored agent
         const agentId = localStorage.getItem('agentmolt_agent_id');
