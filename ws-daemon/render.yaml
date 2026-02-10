@@ -9,13 +9,3 @@ services:
         value: production
       - key: MOLTBOOK_API_KEY
         sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: moltbook-redis
-          property: connectionString
-
-  - type: redis
-    name: moltbook-redis
-    plan: free
-    ipAllowList: [] # Allow all
