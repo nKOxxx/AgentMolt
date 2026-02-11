@@ -1,39 +1,36 @@
-import { storeMemory } from '../../../lib/memory-simple';
-import { validateApiKey, setTenantContext, logAudit, checkRateLimit, validateMemoryInput } from '../../../lib/auth';
+import { storeMemory } from '../../../lib/memory-simple.js';
+import { validateApiKey, setTenantContext, logAudit, validateMemoryInput } from '../../../lib/auth.js';
+import redis from '../../../lib/redis.js';
+import jobs from '../../../lib/jobs.js';
 
 export default async function handler(req, res) {
-  // Method check
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const startTime = Date.now();
   
-  // Extract API key
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) {
     return res.status(401).json({ error: 'Missing API key' });
   }
 
-  // Validate API key and get org context
   const auth = await validateApiKey(apiKey);
   if (!auth.valid) {
     return res.status(401).json({ error: auth.error });
   }
 
-  // Check rate limit
-  const rateLimit = checkRateLimit(auth.orgId, auth.rateLimit);
+  // Check Redis rate limit first (fast)
+  const rateLimit = await redis.checkRedisRateLimit(auth.orgId, auth.rateLimit);
   if (!rateLimit.allowed) {
     return res.status(429).json({ 
       error: 'Rate limit exceeded',
-      retryAfter: rateLimit.resetIn
+      retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
     });
   }
 
-  // Set tenant context for RLS
   await setTenantContext(auth.orgId);
 
-  // Validate input
   const validation = validateMemoryInput(req.body);
   if (!validation.valid) {
     await logAudit({
@@ -49,7 +46,6 @@ export default async function handler(req, res) {
   try {
     const { agent_id, content, content_type, metadata } = req.body;
 
-    // Store memory
     const result = await storeMemory(agent_id, content, content_type, metadata);
 
     const responseTime = Date.now() - startTime;
@@ -67,7 +63,12 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: result.error });
     }
 
-    // Log success
+    // Schedule background NLP job (async)
+    await jobs.scheduleNLPExtraction(result.memory.id, content);
+
+    // Invalidate query cache for this agent (cache invalidation)
+    await redis.invalidateCache(`query:${auth.orgId}:${agent_id}:*`);
+
     await logAudit({
       orgId: auth.orgId,
       agentId: agent_id,
@@ -81,17 +82,20 @@ export default async function handler(req, res) {
       success: true
     });
 
-    // Add rate limit headers
     res.setHeader('X-RateLimit-Limit', auth.rateLimit);
     res.setHeader('X-RateLimit-Remaining', rateLimit.remaining);
+    res.setHeader('X-RateLimit-Reset', rateLimit.resetAt.toISOString());
     res.setHeader('X-Response-Time', `${responseTime}ms`);
+    res.setHeader('X-Cache-Status', 'MISS');
 
     return res.status(201).json({
       success: true,
       memory: result.memory,
+      jobQueued: true,
       rateLimit: {
         limit: auth.rateLimit,
-        remaining: rateLimit.remaining
+        remaining: rateLimit.remaining,
+        resetAt: rateLimit.resetAt
       }
     });
   } catch (error) {
