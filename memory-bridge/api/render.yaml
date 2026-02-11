@@ -2,8 +2,9 @@ services:
   - type: web
     name: memory-bridge
     runtime: node
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && npm run build && cp -r public dist/ 2>/dev/null || true
     startCommand: npm start
+    staticPublishPath: ./public
     envVars:
       - key: NODE_ENV
         value: production

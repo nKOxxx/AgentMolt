@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Bridge - Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 3rem; }
+    h1 {
+      font-size: 3rem;
+      background: linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle { color: #94a3b8; font-size: 1.1rem; }
+    .badge {
+      display: inline-block;
+      background: #1e293b;
+      color: #00d4ff;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      margin-top: 1rem;
+      border: 1px solid #00d4ff;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 3rem 0;
+    }
+    .feature {
+      background: #1a1a2e;
+      padding: 1.5rem;
+      border-radius: 12px;
+      text-align: center;
+      border: 1px solid #2d2d44;
+    }
+    .feature-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+    .feature h3 { font-size: 1rem; margin-bottom: 0.25rem; }
+    .feature p { font-size: 0.85rem; color: #94a3b8; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 1.5rem;
+    }
+    .card {
+      background: #1a1a2e;
+      border-radius: 16px;
+      padding: 1.5rem;
+      border: 1px solid #2d2d44;
+    }
+    .card h2 {
+      font-size: 1.25rem;
+      color: #00d4ff;
+      margin-bottom: 1rem;
+    }
+    .endpoint {
+      background: #0f172a;
+      padding: 0.75rem;
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+    .method { color: #22c55e; margin-right: 0.5rem; }
+    pre {
+      background: #0f172a;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      overflow-x: auto;
+      color: #94a3b8;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .version { color: #94a3b8; font-size: 0.85rem; margin: 0.25rem 0; }
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      padding: 2rem;
+      color: #64748b;
+      border-top: 1px solid #1e293b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🧠 Memory Bridge</h1>
+      <p class="subtitle">Long-term memory for AI agents. Store, query, and recall agent experiences.</p>
+      <span class="badge">FREE TIER MVP</span>
+    </header>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">💾</div>
+        <h3>Persistent Storage</h3>
+        <p>500MB free storage per organization</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔍</div>
+        <h3>Smart Search</h3>
+        <p>Keyword-based memory retrieval</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <h3>Secure & Isolated</h3>
+        <p>Multi-tenant with API key auth</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <h3>Audit Logging</h3>
+        <p>Full traceability of all actions</p>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>📚 API Endpoints</h2>
+        <div class="endpoint"><span class="method">POST</span>/api/memory/store</div>
+        <div class="endpoint"><span class="method">GET</span>/api/memory/query</div>
+        <div class="endpoint"><span class="method">GET</span>/api/memory/timeline</div>
+        <div class="endpoint"><span class="method">GET</span>/api/health</div>
+      </div>
+
+      <div class="card">
+        <h2>🚀 Quick Start</h2>
+        <pre>curl -X POST https://agentmolt-memory.onrender.com/api/memory/store \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "...", "content": "..."}'</pre>
+      </div>
+
+      <div class="card">
+        <h2>✅ Status</h2>
+        <div class="status">
+          <div class="status-dot"></div>
+          <span>API is operational</span>
+        </div>
+        <p class="version">Version: 1.1.0-free</p>
+        <p class="version">Multi-tenancy: Enabled</p>
+        <p class="version">RLS: Active</p>
+      </div>
+    </div>
+
+    <footer>
+      <p>Built for the AgentMolt ecosystem • Open core model</p>
+    </footer>
+  </div>
+</body>
+</html>
