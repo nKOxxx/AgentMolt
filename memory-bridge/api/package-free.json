@@ -1,0 +1,16 @@
+{
+  "name": "memory-bridge-free",
+  "version": "1.0.0",
+  "description": "Memory Bridge Lite - Free tier MVP",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "compromise": "^14.10.0"
+  }
+}
