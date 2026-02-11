@@ -1,0 +1,16 @@
+{
+  "name": "memory-bridge-api",
+  "version": "1.0.0",
+  "description": "Memory Bridge Lite - Agent memory persistence API",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "compromise": "^14.10.0"
+  }
+}
