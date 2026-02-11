@@ -5,12 +5,21 @@
 
 ### The Problem
 
-AI agents lose context when sessions end. Every conversation, decision, and insight evaporates. Agents start from zero each time, repeating work, forgetting preferences, losing institutional knowledge.
+AI agents have **two memory problems**:
+
+**1. The Goldfish Problem (Session Loss)**
+When a session ends, everything evaporates. Every conversation, decision, and insight disappears. Agents start from zero next time, repeating work, forgetting preferences, losing institutional knowledge.
+
+**2. The Context Window Problem (In-Session Loss)**
+Even during active conversations, agents forget. Ask about something discussed 20 messages ago? Lost. Reference an earlier decision? Gone. The agent's "attention span" is limited, and important details fall out of the context window.
+
+**Result:** Agents are amnesiac collaborators - unreliable for complex work that spans time or requires remembering earlier details.
 
 **Current options:**
 - ❌ Vector databases: Complex, expensive, overkill for structured memory
 - ❌ File storage: Unsearchable, unscalable, no security
-- ❌ No persistence: Agents are goldfish
+- ❌ Longer context windows: Expensive, still limited, doesn't solve session loss
+- ❌ No persistence: Agents stay goldfish
 
 ---
 
@@ -29,22 +38,45 @@ AI agents lose context when sessions end. Every conversation, decision, and insi
 
 ### How It Works
 
+**Solves both problems:**
+
 ```
-Agent Session → API Call → Stored Memory → Queried Later
-     ↓              ↓            ↓              ↓
-Discussion    POST /store    Indexed by    GET /query
-about X       (content)      keywords      "what about X?"
+┌─────────────────────────────────────────────────────────┐
+│  DURING CONVERSATION (Context Window Extension)         │
+│  Agent forgets detail from 20 messages ago              │
+│     ↓                                                   │
+│  GET /query?q=what+we+decided+about+X                   │
+│     ↓                                                   │
+│  Returns: "Earlier you decided to build Y..."           │
+│     ↓                                                   │
+│  Agent continues with full context ✓                    │
+└─────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────┐
+│  BETWEEN SESSIONS (Persistence)                         │
+│  Session ends                                           │
+│     ↓                                                   │
+│  All memories automatically saved                       │
+│     ↓                                                   │
+│  Next session: GET /query?q=previous+work               │
+│     ↓                                                   │
+│  Agent resumes with full history ✓                      │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Example:**
 ```bash
-# Store
+# Store important decisions/insights
 POST /api/memory/store
-{"agent_id": "...", "content": "Discussed payment rails", "content_type": "conversation"}
+{"agent_id": "...", "content": "User prefers dark mode, wants mobile-first design", "content_type": "insight"}
 
-# Retrieve  
-GET /api/memory/query?q=payment+rails
-→ Returns ranked memories with relevance scores
+# Retrieve during conversation (context window augmentation)
+GET /api/memory/query?q=user+design+preferences
+→ Returns: "User prefers dark mode, wants mobile-first design"
+
+# Retrieve next week (session persistence)
+GET /api/memory/query?q=what+we+decided
+→ Returns full conversation history with rankings
 ```
 
 ---
