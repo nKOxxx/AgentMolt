@@ -218,9 +218,13 @@ export async function extendSession(sessionId) {
 // ============================================
 
 export async function getRedisHealth() {
+  if (!checkRedisEnabled()) {
+    return { connected: false, mode: 'fallback', reason: 'not_configured' };
+  }
+  
   const client = getRedis();
   if (!client) {
-    return { connected: false, mode: 'fallback' };
+    return { connected: false, mode: 'fallback', reason: 'init_failed' };
   }
   
   try {
@@ -235,8 +239,8 @@ export async function getRedisHealth() {
       latency: `${latency}ms`,
       mode: 'redis',
       stats: {
-        hits: parseInt(stats.hits || 0),
-        sets: parseInt(stats.sets || 0)
+        hits: parseInt(stats?.hits || 0),
+        sets: parseInt(stats?.sets || 0)
       }
     };
   } catch (error) {
