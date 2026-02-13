@@ -1,5 +1,4 @@
 import { validateApiKey, setTenantContext, logAudit } from '../../../lib/auth.js';
-import { x402Middleware } from '@coinbase/x402-sdk/express';
 
 /**
  * Paid Skill Execution Endpoint
